@@ -1,3 +1,29 @@
+Changes in this fork:
+----------
+
+Added functions compatible with Thinbus-SRP for u,M,K calculations and
+a generator of Thinbus safe prime config file.
+Usage is the same as with original pysrp but with a few differences:
+
+In pysrp the dataflow expected during authentication is:
+
+    Client -> Server: username, A
+    Server -> Client: s, B
+    Client - > Server: M
+    Server - > Client : H(A,M,K)
+
+While in Thinbus:
+
+    Client -> Server: username
+    Server -> Client: s, B
+    Client - > Server: M, A
+    Server -> Client: H(A,M,K)
+
+So you have to provide some string instead of A on server side at 
+first initialisation of `srp.Verifier` object. Examples will be added 
+later.
+
+
 pysrp
 =====
 Tom Cocagne &lt;tom.cocagne@gmail.com&gt;
