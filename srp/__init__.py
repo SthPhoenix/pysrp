@@ -21,6 +21,7 @@ if not _mod:
 User                           = _mod.User
 Verifier                       = _mod.Verifier
 create_salted_verification_key = _mod.create_salted_verification_key
+get_thinbus_config             = _mod.get_thinbus_config
 
 SHA1      = _mod.SHA1
 SHA224    = _mod.SHA224
