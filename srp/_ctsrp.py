@@ -362,6 +362,64 @@ def get_ngk( hash_class, ng_type, n_hex, g_hex, rfc5054=False ):
 
     return N, g, k
 
+#Thinbus compatible u,M,K calculations:
+def thinbus_u(hash_class,A,B):
+    vars = {}
+    U = BN_new()
+    vars['a']=bn_to_bytes(A).encode('hex')
+    b=bn_to_bytes(B).encode('hex')
+    for key in vars:
+        while vars[key][0]=='0':
+            vars[key] = vars[key][1:]
+    #print 'A: {0}'.format(vars['a'])
+    #print 'B: {0}'.format(vars['b'])
+    u = hash_class(vars['a']+b).digest()
+    bytes_to_bn(U,u)
+    return U
+
+def thinbus_M(hash_class,A,B,S):
+    vars = {}
+    vars['a']=bn_to_bytes(A).encode('hex')
+    vars['s']=bn_to_bytes(S).encode('hex')
+    b=bn_to_bytes(B).encode('hex')
+    for key in vars:
+        while vars[key][0]=='0':
+            vars[key] = vars[key][1:]
+    M = hash_class(vars['a']+b+vars['s']).hexdigest()
+    while M[0]=='0':
+        M=M[1:]
+    return M
+
+def thinbus_K(hash_class,S):
+    s = bn_to_bytes(S).encode('hex')
+    while s[0]=='0':
+        s = s[1:]
+    #print 'S_ed: {0}'.format(s)
+    k = hash_class(s).hexdigest()
+    while k[0]=='0':
+        k = k[1:]
+    return k
+	
+#Export thinbus rfc5054-safe-prime-config.js config file based on desired pysrp N and hash configs
+def get_thinbus_config(path='rfc5054-safe-prime-config.js',hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None):
+    if ng_type == NG_CUSTOM and (n_hex is None or g_hex is None):
+        raise ValueError("Both n_hex and g_hex are required when ng_type = NG_CUSTOM")
+    hash_class = _hash_map[ hash_alg ]
+    N,g,k      = get_ngk( hash_class, ng_type, n_hex, g_hex )
+    N = str(int(bn_to_bytes(N).encode('hex'),16))
+    g = str(int(bn_to_bytes(g).encode('hex'),16))
+    k = bn_to_bytes(k).encode('hex')
+    string = '// RFC 5054 8192bit constants\n' \
+                'var SRP6CryptoParams= {\n' \
+                '  N_base10: "%s",\n' \
+                '  g_base10: "%s",\n' \
+                '  k_base16: "%s"\n' \
+                '};'
+    string = string % (N,g,k)
+    f = open(path,'w')
+    f.write(string)
+    f.close()
+    return string
     
   
 def create_salted_verification_key( username, password, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None ):
@@ -398,9 +456,11 @@ def create_salted_verification_key( username, password, hash_alg=SHA1, ng_type=N
 
 class Verifier (object):
     def __init__(self,  username, bytes_s, bytes_v, bytes_A, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None,
-                 rfc5054_compat=False):
+                bytes_b=None, rfc5054_compat=False,thinbus_compat=False):
         if ng_type == NG_CUSTOM and (n_hex is None or g_hex is None):
             raise ValueError("Both n_hex and g_hex are required when ng_type = NG_CUSTOM")
+        if thinbus_compat:
+            rfc5054_compat=True
         self.A     = BN_new()
         self.B     = BN_new()
         self.K     = None
@@ -438,15 +498,22 @@ class Verifier (object):
         if BN_is_zero(self.tmp1):
             self.safety_failed = True
         else:                    
-            BN_rand(self.b, 256, -1, 0)
+            #Added check of precomputed b value from pysrp master btanch
+            if bytes_b:
+                bytes_to_bn( self.b, bytes_b )
+            else:
+                BN_rand(self.b, 256, 0, 0)
             
             # B = kv + g^b
             if rfc5054_compat:
                 BN_mod_mul(self.tmp1, k, self.v, N, self.ctx)
                 BN_mod_exp(self.tmp2, g, self.b, N, self.ctx)
                 BN_mod_add(self.B, self.tmp1, self.tmp2, N, self.ctx)
-
-                H_bn_bn_rfc5054(hash_class, self.u, self.N, self.A, self.B)
+                #Changed U calculation
+                if thinbus_compat:
+                    self.u = thinbus_u(hash_class,self.A,self.B)
+                else:
+                    H_bn_bn_rfc5054(hash_class, self.u, self.N, self.A, self.B)
             else:
                 BN_mul(self.tmp1, k, self.v, self.ctx)
                 BN_mod_exp(self.tmp2, g, self.b, N, self.ctx)
@@ -458,10 +525,17 @@ class Verifier (object):
             BN_mod_exp(self.tmp1, self.v, self.u, N, self.ctx)
             BN_mul(self.tmp2, self.A, self.tmp1, self.ctx)
             BN_mod_exp(self.S, self.tmp2, self.b, N, self.ctx)
-            
-            self.K = hash_class( bn_to_bytes(self.S) ).digest()
-            
-            self.M     = calculate_M( hash_class, N, g, self.I, self.s, self.A, self.B, self.K )
+            #Changed K calculation
+            if thinbus_compat:
+                self.K = thinbus_K(hash_class,self.S)
+            else:
+                self.K = hash_class( bn_to_bytes(self.S) ).digest()
+            #Changed M calculation
+            if thinbus_compat:
+                self.M = thinbus_M(hash_class,self.A,self.B,self.S)
+            else:
+                self.M     = calculate_M( hash_class, N, g, self.I, self.s, self.A, self.B, self.K )
+            #TODO: Fix H_AMK calculation for Thinbus compatibility
             self.H_AMK = calculate_H_AMK( hash_class, self.A, self.M, self.K )
         
         
@@ -490,6 +564,10 @@ class Verifier (object):
     def get_username(self):
         return self.I
     
+    #Added function form main branch of pysrp 
+    def get_ephemeral_secret(self):
+        return bn_to_bytes(self.b)
+    
     
     def get_session_key(self):
         return self.K if self._authenticated else None
@@ -513,7 +591,7 @@ class Verifier (object):
     
 class User (object):
     def __init__(self, username, password, hash_alg=SHA1, ng_type=NG_2048, n_hex=None, g_hex=None,
-                 rfc5054_compat=False):
+                 rfc5054_compat=False,thinbus_compat=False):
         if ng_type == NG_CUSTOM and (n_hex is None or g_hex is None):
             raise ValueError("Both n_hex and g_hex are required when ng_type = NG_CUSTOM")
         self.username = username
@@ -534,6 +612,9 @@ class User (object):
         self.K     = None
         self.H_AMK = None
         self._authenticated = False
+        if thinbus_compat:
+            rfc5054_compat=True
+        self.thinbus = thinbus_compat
         self.rfc5054 = rfc5054_compat
         
         hash_class = _hash_map[ hash_alg ]
@@ -601,7 +682,11 @@ class User (object):
             return None
 
         if self.rfc5054:
-            H_bn_bn_rfc5054(hash_class, self.u, self.N, self.A, self.B)
+          #Changed u calculation
+            if self.thinbus:
+                self.u = thinbus_u(hash_class,self.A,self.B)
+            else:
+                H_bn_bn_rfc5054(hash_class, self.u, self.N, self.A, self.B)
         else:
             H_bn_bn_orig(hash_class, self.u, self.A, self.B)
         
@@ -621,9 +706,14 @@ class User (object):
         BN_mul(self.tmp3, k, self.tmp1, self.ctx)       # tmp3 = k*(g^x)
         BN_sub(self.tmp1, self.B, self.tmp3)            # tmp1 = (B - K*(g^x))
         BN_mod_exp(self.S, self.tmp1, self.tmp2, N, self.ctx)
-
-        self.K     = hash_class( bn_to_bytes(self.S) ).digest()
-        self.M     = calculate_M( hash_class, N, g, self.username, self.s, self.A, self.B, self.K )
+        #Changed K and M calculations
+        if self.thinbus:
+            self.K = thinbus_K(hash_class,self.S)
+            self.M = thinbus_M(hash_class,self.A,self.B,self.S)
+        else:
+            self.K = hash_class( bn_to_bytes(self.S) ).digest()
+            self.M     = calculate_M( hash_class, N, g, self.username, self.s, self.A, self.B, self.K )
+        #TODO: calculate Thinbus compatible H_AMK
         self.H_AMK = calculate_H_AMK( hash_class, self.A, self.M, self.K )
 
         return self.M
