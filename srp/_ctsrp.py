@@ -528,12 +528,9 @@ class Verifier (object):
             #Changed K calculation
             if thinbus_compat:
                 self.K = thinbus_K(hash_class,self.S)
-            else:
-                self.K = hash_class( bn_to_bytes(self.S) ).digest()
-            #Changed M calculation
-            if thinbus_compat:
                 self.M = thinbus_M(hash_class,self.A,self.B,self.S)
             else:
+                self.K = hash_class( bn_to_bytes(self.S) ).digest()
                 self.M     = calculate_M( hash_class, N, g, self.I, self.s, self.A, self.B, self.K )
             #TODO: Fix H_AMK calculation for Thinbus compatibility
             self.H_AMK = calculate_H_AMK( hash_class, self.A, self.M, self.K )
